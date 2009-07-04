@@ -10,7 +10,8 @@
 #   python notes2mbox.py mot_de_passe_lotus c:\chemin\de\la\base.nsf
 # => un fichier .mbox sera créé qu'il suffit de copier dans le répertoire ad-hoc de Thunderbird (ou d'un autre client...)
 
-import sys 
+import sys
+import os 
 import mailbox
 import email.mime.multipart
 import email.mime.text
@@ -19,6 +20,7 @@ import email.header
 import mimetypes
 from email import encoders
 import re
+import tempfile
 import win32com.client
 #LES APPELS COM SE FONT avec une majuscule
 
@@ -52,16 +54,29 @@ def matchAddress(value):
         else :
             return res.group(1)
     else :
-        return "%s.%s@dgfip.finances.gouv.fr" % (res.group(1).lower(), res.group(2).lower())
+        return u"%s.%s@dgfip.finances.gouv.fr" % (res.group(1).lower(), res.group(2).lower())
         
 def addressHeader(doc, item):
     items = get(doc, item)
     return makeheader(",".join(map(matchAddress, items)))
 
+def messageHeaders(doc, m):
+    m['Subject'] = header(doc, "Subject")
+    m['From'] = addressHeader(doc, "From")
+    m['To'] = addressHeader(doc, "sendto")
+    m['Cc'] = addressHeader(doc, "copyto")
+    m['Date'] = get1(doc, "PostedDate")
+    if m['Date'] == u'':
+        m['Date'] = get1(doc, "DeliveredDate")
+    ccc = addressHeader(doc, "BlindCopyTo")
+    if ccc != u'':
+        m['Ccc'] = ccc
+
 #Constantes
 notesPasswd = "foobar"
 notesNsfPath = "C:\\archive.nsf"
 mailboxName = notesNsfPath+".mbox"
+tempdir = tempfile.mkdtemp('_nlconverter')
 
 #Connection à Notes
 session = win32com.client.Dispatch(r'Lotus.NotesSession')
@@ -79,30 +94,22 @@ c = 0 #compteur de documents
 e = 0 #compteur d'erreur à la conversion
 
 doc = all.GetFirstDocument()
-while doc and c < 100:
+while doc and c < 99999 and e < 5:
     try:
-        m = email.mime.multipart.MIMEMultipart()
-        m.set_charset('iso-8859-15')
-        m['Subject'] = header(doc, "Subject")
-        m['From'] = addressHeader(doc, "From")
-        m['To'] = addressHeader(doc, "sendto")
-        m['Cc'] = addressHeader(doc, "copyto")
-        m['Date'] = get1(doc, "PostedDate")
-        if m['Date'] == u'':
-            m['Date'] = get1(doc, "DeliveredDate")
-        ccc = addressHeader(doc, "BlindCopyTo")
-        if ccc != u'':
-            m['Ccc'] = ccc
-
-        main = email.mime.text.MIMEText(doc.GetItemValue("Body")[0], 'main', 'iso-8859-15')
-        m.attach(main)
+        main = email.mime.text.MIMEText(doc.GetItemValue("Body")[0], _charset='iso-8859-15')
         
         #files
-        files = get(doc, "$FILE")
-        if len(files) > 0 and files[0] != u'' :
+        files = filter(lambda x : x != None and x != u'', get(doc, "$FILE"))
+        if len(files) > 0 :
+            m = email.mime.multipart.MIMEMultipart(charset='iso-8859-15')
+            m.set_charset('iso-8859-15')
+            messageHeaders(doc, m)
+            m.attach(main)
             for f in files :
                 a = doc.GetAttachment(f)
-                fpath = "P:\\tmp\\%s" % f
+                if a == None :
+                    continue
+                fpath = os.path.join(tempdir, f)
                 a.ExtractFile(fpath)
                 ctype, encoding = mimetypes.guess_type(fpath)
                 if ctype is None or encoding is not None:
@@ -110,15 +117,18 @@ while doc and c < 100:
                     # use a generic bag-of-bits type.
                     ctype = 'application/octet-stream'
                 maintype, subtype = ctype.split('/', 1)
-                print maintype, subtype
                 fp = open(fpath, 'rb')
                 msg = email.mime.base.MIMEBase(maintype, subtype)
                 msg.set_payload(fp.read())
                 fp.close()
                 encoders.encode_base64(msg)
 
-                msg.add_header('Content-Disposition', 'attachment', filename=f)
+                msg.add_header('Content-Disposition', 'attachment', filename=f.encode('utf-8'))
                 m.attach(msg)
+                os.remove(fpath)
+        else:
+            m = main
+            messageHeaders(doc, m)
 
         mbox.add (m)
         
@@ -126,14 +136,14 @@ while doc and c < 100:
         e += 1 #compte les exceptions
         print "-----------Exception, message %d" % c
         print ex
-        print "Subject", doc.GetItemValue("Subject")
-        print "From", doc.GetItemValue("From")
-        print "To", doc.GetItemValue("sendto")
-        print "Cc", doc.GetItemValue("copyto")
-        print "Date", doc.GetItemValue("PostedDate"), doc.GetItemValue("DeliveredDate")
+        for it in doc.Items:
+            print it, doc.GetItemValue(it)
 
     finally:
         doc = all.GetNextDocument(doc)
         c += 1
+
 print "Exceptions a traiter manuellement:", e
 mbox.close()
+os.rmdir(tempdir)
+#FIXME : session OLE a cloturer
