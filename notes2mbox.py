@@ -29,16 +29,21 @@ reAddressNotes = re.compile(r'CN=(.*?)\s+(.*?)\/OU=DGI\/OU=FINANCES\/O=GOUV\/C=F
 reAddressMail = re.compile(r'([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,6})', re.IGNORECASE)
 
 class NotesDocumentReader(object):
+    """Base class for all documents"""
     def __init__(self):
+        #compute a name for temporary files (attachments)
         self.tempname = os.path.join(tempfile.gettempdir(), 'nlc.tmp')
 
     def get(self, doc, itemname):
+        """Helper to get an Item value in a document"""
         return doc.GetItemValue(itemname)
 
     def getDocumentType(self, doc):
+        """Helper to get the 'Form' name"""
         return self.get1(doc, 'Form')
 
     def get1(self, doc, itemname):
+        """Helper to get the first item value"""
         itemvalue = self.get(doc, itemname)
         if len(itemvalue):
             return itemvalue[0]
@@ -46,9 +51,11 @@ class NotesDocumentReader(object):
             return u''
 
     def checkDocumentType(self, doc):
+        """Check if the document handling by the class"""
         return True
         
     def debug(self, doc):
+        """Debug method : print all items values"""
         for it in doc.Items:
             try:
                 print it, doc.GetItemValue(it)
@@ -56,6 +63,7 @@ class NotesDocumentReader(object):
                 print it, "!! can't display item value !!"
 
     def matchAddress(value):
+        """Convert Notes Address Name Space into emails"""
         res = reAddressNotes.search(value)
         if res == None:
             res = reAddressMail.search(value)
@@ -67,27 +75,35 @@ class NotesDocumentReader(object):
             return u"%s.%s@dgfip.finances.gouv.fr" % (res.group(1).lower(), res.group(2).lower())
 
     def listAttachments(self, doc):
+        """Return the list of the attachments, striping None and void names"""
         return filter(lambda x : x != None and x != u'', self.get(doc, "$FILE"))
 
     def hasAttachments(self, doc):
+        """True if theyre are any attachments"""
         return len(self.listAttachments) > 0
         
     def extractAttachment(self, doc, f):
+        """Extract an attachment from the document"""
         a = doc.GetAttachment(f)
         #FIXME : tester le \xa0
         a.ExtractFile(self.tempname)
 
 class NotesMemoReader(NotesDocumentReader):
+    """Subclass for reading 'Memo' Notes Documents"""
     def checkDocumentType(self, doc):
         return self.getDocumentType(doc) == u'Memo'
       
 class NotesDocumentConverter(NotesDocumentReader):
+    """Base class for all converters"""
     pass
 
 class NotesMemoToMimeConverter(NotesDocumentConverter):
-    charset = 'iso-8859-15'
+    """Convert a Memo Document to a Mime Message"""
+    charset = 'iso-8859-15' #default charset
+    charsetAttachment = 'utf-8' #alternative charset
     
     def stringToHeader(self, value):
+        """Build a Mail header value from a string""" 
         return email.header.Header(value, self.charset)
         
     def header(self, doc, itemname):
@@ -126,16 +142,22 @@ class NotesMemoToMimeConverter(NotesDocumentConverter):
         m['Message-ID'] = self.header(doc, "$MessageID")
 
     def buildAttachment(self, doc, f):
+        """Build Mime Attachment 'f' from doc""" 
         self.extractAttachment(doc, f)
         fp = open(self.tempname, 'rb')
         msg = email.mime.base.MIMEBase('application', 'octet-stream')
         msg.set_payload(fp.read())
         fp.close()
         encoders.encode_base64(msg)
-        msg.add_header('Content-Disposition', 'attachment', filename=f.encode(self.charset))
+        try:
+          fname = f.encode(self.charsetAttachment)
+        except :
+            fname = f.encode(self.charset)
+        msg.add_header('Content-Disposition', 'attachment', filename=fname)
         return msg
 
     def buildMessage(self, doc):
+        """Build a message from doc"""
         main = self.buildMailBody(doc)
         
         #files
@@ -176,7 +198,7 @@ e = 0 #compteur d'erreur à la conversion
 mc = NotesMemoToMimeConverter()
 
 doc = all.GetFirstDocument()
-while doc and c < 200 and e < 99999:
+while doc and c < 99999 and e < 99999:
     try:
         m = mc.buildMessage(doc)
         mbox.add (m)
