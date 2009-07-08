@@ -4,7 +4,6 @@
 # * Installer python 2.6 pour windows
 # * Installer pywin 2.6 pour windows
 # * (optionnellement) enregistrer la dll com de notes : "regsvr32 c:\notes\nlsxbe.dll"
-# * Ouvrir le client Notes et les bases qu'il faut convertir
 # * en ligne de commande (cmd) :
 #   SET PATH=%PATH%;C:\Python26
 #   **pour l'instant** fixer notesPasswd et notesNsfPath plus bas

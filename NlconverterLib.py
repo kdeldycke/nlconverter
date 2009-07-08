@@ -8,6 +8,11 @@ from email import encoders
 import re
 import tempfile
 
+import icalendar
+from datetime import datetime
+import time
+
+
 #Regexp
 reAddressNotes = re.compile(r'CN=(.*?)\s+(.*?)\/OU=DGI\/OU=FINANCES\/O=GOUV\/C=FR', re.IGNORECASE)
 reAddressMail = re.compile(r'([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,6})', re.IGNORECASE)
@@ -22,7 +27,7 @@ class NotesDocumentReader(object):
         """Helper to get an Item value in a document"""
         return doc.GetItemValue(itemname)
 
-    def getDocumentType(self, doc):
+    def getDocumentForm(self, doc):
         """Helper to get the 'Form' name"""
         return self.get1(doc, 'Form')
 
@@ -34,10 +39,6 @@ class NotesDocumentReader(object):
         else :
             return u''
 
-    def checkDocumentType(self, doc):
-        """Check if the document handling by the class"""
-        return True
-        
     def debug(self, doc):
         """Debug method : print all items values"""
         for it in doc.Items:
@@ -75,12 +76,37 @@ class NotesDocumentReader(object):
 
 class NotesMemoReader(NotesDocumentReader):
     """Subclass for reading 'Memo' Notes Documents"""
-    def checkDocumentType(self, doc):
+    def checkDocumentForm(self, doc):
         return self.getDocumentType(doc) == u'Memo'
       
 class NotesDocumentConverter(NotesDocumentReader):
     """Base class for all converters"""
     pass
+
+class NotesEventToIcalConverter(NotesDocumentReader):
+    def buildMessage(self, doc):
+        event = icalendar.Event()
+        event['uid'] = self.get1(doc, "$MessageID")
+        sd = time.gmtime(int(self.get1(doc, "StartDate")) )[:5]
+        ed = time.gmtime(int(self.get1(doc, "EndDate")) )[:5]
+        event.add('dtstart', datetime(*sd ))
+        event.add('summary', self.get1(doc, 'Subject'))
+        event.add('dtend', datetime(*ed))
+        event.add('dtstamp', datetime(*sd))
+        organizer = icalendar.vCalAddress("MAILTO:%s" % self.get1(doc, "INetFrom"))
+  #organizer.params['cn'] = vText('Max Rasmussen')
+  #organizer.params['role'] = vText('CHAIR')
+        event['organizer'] = organizer
+        #event['location'] = vText('Odense, Denmark')
+
+  #>>> event.add('priority', 5)
+
+  #>>> attendee = vCalAddress('MAILTO:maxm@example.com')
+  #>>> attendee.params['cn'] = vText('Max Rasmussen')
+  #>>> attendee.params['ROLE'] = vText('REQ-PARTICIPANT')
+  #>>> event.add('attendee', attendee, encode=0)
+        return event
+
 
 class NotesMemoToMimeConverter(NotesDocumentConverter):
     """Convert a Memo Document to a Mime Message"""
@@ -94,20 +120,6 @@ class NotesMemoToMimeConverter(NotesDocumentConverter):
     def header(self, doc, itemname):
         return self.stringToHeader(self.get1(doc, itemname))
     
-    def matchAddress(self, value):
-        res = reAddressNotes.search(value)
-        if res == None:
-            res = reAddressMail.search(value)
-            if res == None:
-                return value.lower()
-            else :
-                return res.group(1)
-        else :
-            return u"%s.%s@dgfip.finances.gouv.fr" % (res.group(1).lower(), res.group(2).lower())
-
-    def buildMailBody(self, doc):
-        return email.mime.text.MIMEText(mc.get1(doc, 'Body'), _charset=self.charset)
-
     def addressHeader(self, doc, item):
         items = self.get(doc, item)
         return self.stringToHeader(",".join(map(self.matchAddress, items)))
@@ -143,7 +155,7 @@ class NotesMemoToMimeConverter(NotesDocumentConverter):
 
     def buildMessage(self, doc):
         """Build a message from doc"""
-        main = self.buildMailBody(doc)
+        main = email.mime.text.MIMEText(self.get1(doc, 'Body'), _charset=self.charset)
         
         #files
         files = self.listAttachments(doc)
