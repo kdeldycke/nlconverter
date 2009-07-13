@@ -1,21 +1,41 @@
+# -*- coding: utf-8 -*-
 import os 
+
+#COM/DDE
+import win32com.client #NB : Calls to COM are starting with an uppercase
+
+#Mime dependencies
 import email.mime.multipart
 import email.mime.text
 import email.mime.base
 import email.header
 import mimetypes
 from email import encoders
-import re
-import tempfile
 
+import re #in order to parse addresses
+import tempfile #required for dealing with attachment
+
+#icalendar / time
 import icalendar
-from datetime import datetime
+import datetime
 import time
 
+#mailbox
+import mailbox
 
 #Regexp
-reAddressNotes = re.compile(r'CN=(.*?)\s+(.*?)\/OU=DGI\/OU=FINANCES\/O=GOUV\/C=FR', re.IGNORECASE)
+addressNotesDomainTable =  { 'dgi.finances.gouv.fr' : 'dgfip.finances.gouv.fr', }
+reGenericAddressNotes = re.compile(r'CN=(.*?)\s+(.*?)\/(.*?)O=(\w*?)\/C=(\w*)', re.IGNORECASE)
+reOU = re.compile(r'OU=(\w+?)\/', re.IGNORECASE)
 reAddressMail = re.compile(r'([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,6})', re.IGNORECASE)
+
+
+def getNotesDb(notesNsfPath, notesPasswd):
+    """Connect to notes and open the nsf file"""
+    session = win32com.client.Dispatch(r'Lotus.NotesSession')
+    session.Initialize(notesPasswd)
+    return session.GetDatabase("", notesNsfPath)
+
 
 class NotesDocumentReader(object):
     """Base class for all documents"""
@@ -26,10 +46,6 @@ class NotesDocumentReader(object):
     def get(self, doc, itemname):
         """Helper to get an Item value in a document"""
         return doc.GetItemValue(itemname)
-
-    def getDocumentForm(self, doc):
-        """Helper to get the 'Form' name"""
-        return self.get1(doc, 'Form')
 
     def get1(self, doc, itemname):
         """Helper to get the first item value"""
@@ -43,13 +59,15 @@ class NotesDocumentReader(object):
         """Debug method : print all items values"""
         for it in doc.Items:
             try:
-                print it, doc.GetItemValue(it)
+                self.log("%s => %s" % (it, doc.GetItemValue(it)) )
             except:
-                print it, "!! can't display item value !!"
+                self.log("%s => !! can't display item value !!" % it)
+        self.log(20*'.')
+        self.log("")
 
-    def matchAddress(value):
+    def matchAddress(self, value):
         """Convert Notes Address Name Space into emails"""
-        res = reAddressNotes.search(value)
+        res = reGenericAddressNotes.search(value)
         if res == None:
             res = reAddressMail.search(value)
             if res == None:
@@ -57,7 +75,14 @@ class NotesDocumentReader(object):
             else :
                 return res.group(1)
         else :
-            return u"%s.%s@dgfip.finances.gouv.fr" % (res.group(1).lower(), res.group(2).lower())
+            mail = u"%s.%s@" % ( res.group(1).lower(), res.group(2).lower() )
+            subs = reOU.findall(res.group(3))
+            subs += res.groups()[3:]
+            suffix = ('.'.join(subs)).lower()
+            if addressNotesDomainTable.has_key(suffix):
+                suffix = addressNotesDomainTable[suffix]
+            mail += suffix
+            return mail.lower()
 
     def listAttachments(self, doc):
         """Return the list of the attachments, striping None and void names"""
@@ -74,41 +99,79 @@ class NotesDocumentReader(object):
         #FIXME : bug when there is \xa0 (non breaking space) in the filename. What to do then ?
         a.ExtractFile(self.tempname)
 
-class NotesMemoReader(NotesDocumentReader):
-    """Subclass for reading 'Memo' Notes Documents"""
-    def checkDocumentForm(self, doc):
-        return self.getDocumentType(doc) == u'Memo'
-      
+    def dateitem2datetime(self, doc, itemname):
+        datetuple = time.gmtime(int(self.get1(doc, itemname)) )[:5]
+        return datetime.datetime(*datetuple )
+
+    def log(self, message = ""):
+        print message
+
+
 class NotesDocumentConverter(NotesDocumentReader):
     """Base class for all converters"""
-    pass
 
-class NotesEventToIcalConverter(NotesDocumentReader):
+    formWhiteList = None
+    formBlackList = []
+
+    def addDocument(self, doc):
+        """Generic add of a document which does nothing"""
+        """Check if this form type is allowed"""
+        fname = self.get1(doc, 'Form')
+        return (
+            (self.formWhiteList == None or fname in self.formWhiteList)
+            and (fname not in self.formBlackList) #OK for blacklist
+            )
+
+    def close(self):
+        pass
+
+
+class NotesToIcalConverter(NotesDocumentConverter):
+    formWhiteList = ['Appointment']
+    cal = None
+    filedescriptor = None
+
+    def __init__(self, icalfilename):
+        """open/init icalfilename"""
+        super(NotesToIcalConverter, self).__init__()
+        self.cal = icalendar.Calendar()
+        self.filedescriptor = open(icalfilename, 'wb')
+
+    def addDocument(self, doc):
+        if not super(NotesToIcalConverter, self).addDocument(doc):
+            return False
+        if self.filedescriptor == None :
+             self.log("--Error : destination file not defined !!")
+        m = self.buildMessage(doc)
+        self.cal.add_component(m)
+        #self.debug(doc)
+        return True
+
+    def close(self):
+        self.filedescriptor.write(self.cal.as_string())
+        self.filedescriptor.close()
+
+    def matchAddress2vcal(self, address):
+        return icalendar.vCalAddress("MAILTO:%s" % self.matchAddress(address) )
+        
     def buildMessage(self, doc):
         event = icalendar.Event()
-        event['uid'] = self.get1(doc, "$MessageID")
-        sd = time.gmtime(int(self.get1(doc, "StartDate")) )[:5]
-        ed = time.gmtime(int(self.get1(doc, "EndDate")) )[:5]
-        event.add('dtstart', datetime(*sd ))
+        event['uid'] = self.get1(doc, "ApptUNID")
         event.add('summary', self.get1(doc, 'Subject'))
-        event.add('dtend', datetime(*ed))
-        event.add('dtstamp', datetime(*sd))
-        organizer = icalendar.vCalAddress("MAILTO:%s" % self.get1(doc, "INetFrom"))
-  #organizer.params['cn'] = vText('Max Rasmussen')
-  #organizer.params['role'] = vText('CHAIR')
-        event['organizer'] = organizer
-        #event['location'] = vText('Odense, Denmark')
-
-  #>>> event.add('priority', 5)
-
-  #>>> attendee = vCalAddress('MAILTO:maxm@example.com')
-  #>>> attendee.params['cn'] = vText('Max Rasmussen')
-  #>>> attendee.params['ROLE'] = vText('REQ-PARTICIPANT')
-  #>>> event.add('attendee', attendee, encode=0)
+        event.add('dtstart', self.dateitem2datetime(doc, "StartDate"))
+        event.add('dtend', self.dateitem2datetime(doc, "EndDate"))
+        event.add('dtstamp', self.dateitem2datetime(doc, "StartDate"))
+        organizer =  self.matchAddress2vcal(self.get1(doc, "From") )
+        #FIXME : encoding is not correctly handled...
+        event.add('organizer' , organizer, encode='iso-8859-15')
+        for att in self.get(doc, "SendTo"):
+            attendee = self.matchAddress2vcal( att )
+            attendee.params['ROLE'] = icalendar.vText('REQ-PARTICIPANT')
+            event.add('attendee', attendee, encode='iso-8859-15')
         return event
 
 
-class NotesMemoToMimeConverter(NotesDocumentConverter):
+class NotesToMimeConverter(NotesDocumentConverter):
     """Convert a Memo Document to a Mime Message"""
     charset = 'iso-8859-15' #default charset
     charsetAttachment = 'utf-8' #attachment filename charset. Because Linux and Windows seems to use Utf-8 for filenames...
@@ -171,3 +234,19 @@ class NotesMemoToMimeConverter(NotesDocumentConverter):
             m = main
             self.messageHeaders(doc, m)
         return m
+
+class NotesToMboxConverter(NotesToMimeConverter):
+    """Notes to mbox format converter"""
+    mbox = None
+
+    def __init__(self, filename):
+        super(NotesToMboxConverter, self).__init__()
+        self.mbox = mailbox.mbox(filename, None, True)
+        
+    def addDocument(self, doc):
+        super(NotesToMboxConverter, self).addDocument(doc)
+        m = self.buildMessage(doc)
+        self.mbox.add(m)
+
+    def close(self):
+        self.mbox.close()

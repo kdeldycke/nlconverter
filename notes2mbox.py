@@ -11,22 +11,14 @@
 # => un fichier .mbox sera créé qu'il suffit de copier dans le répertoire ad-hoc de Thunderbird (ou d'un autre client...)
 
 import sys
-import mailbox
-import win32com.client #NB : Les appels COM se font avec une majuscule en début de méthode
 import NlconverterLib
 
 #Constantes
 notesPasswd = "foobar"
 notesNsfPath = "C:\\archive.nsf"
-mailboxName = notesNsfPath+".mbox"
 
 #Connection à Notes
-session = win32com.client.Dispatch(r'Lotus.NotesSession')
-session.Initialize(notesPasswd)
-db = session.GetDatabase("", notesNsfPath)
-
-#Création du fichier mbox
-mbox = mailbox.mbox(mailboxName, None, True)
+db = NlconverterLib.getNotesDb(notesNsfPath, notesPasswd)
 
 #all = tous les documents
 all=db.AllDocuments
@@ -35,25 +27,28 @@ print "Nombre de documents :", ac
 
 c = 0 #compteur de documents
 e = 0 #compteur d'erreur à la conversion
-
-mc = NlconverterLib.NotesMemoToMimeConverter()
+               
+mc = NlconverterLib.NotesToMboxConverter(notesNsfPath+".mbox")
+ic = NlconverterLib.NotesToIcalConverter(notesNsfPath+".ics")
 
 doc = all.GetFirstDocument()
-while doc and c < 99999 and e < 99999:
+
+while doc and c < 100000 and e < 99999:
     try:
-        m = mc.buildMessage(doc)
-        mbox.add (m)
-        
-    except Exception as ex:
+        #mc.addDocument(doc)                
+        ic.addDocument(doc)
+
+    except Exception, ex:
         e += 1 #compte les exceptions
         print "\n--Exception for message %d (%s)" % (c, ex)
         mc.debug(doc)
 
     finally:
         doc = all.GetNextDocument(doc)
-        c += 1
+        c+=1
         if (c % 100) == 0:
-            sys.stderr.write("%.1f%%\n" % float(100.*c/ac) )
-print "Exceptions a traiter manuellement:", e
-mbox.close()
-#FIXME : session OLE a cloturer
+            sys.stderr.write("%.1f%%, e=%d, c=%d\n" % (float(100.*c/ac), e, c) )
+print "Exceptions a traiter manuellement:", e, "... documents OK : ", c
+
+mc.close()
+ic.close()
