@@ -24,30 +24,31 @@ import NlconverterLib
 import os
 
 class Gui(Tkinter.Frame):
+    """Basic Gui using NlconverterLib"""
     def __init__(self):
         Tkinter.Frame.__init__(self)
         self.master.title("Lotus Notes Converter")
         self.defaultOpenPath = '.'
+        self.defaultSaveName = "old_lotus_notes"
         self.nsfPath = None
-        self.destPath = None
+        self.destMbox = None
         self.checked = False
         self.dbNotes = None
 
         #Source chooser
-        #Tkinter.Label(self.master, text="Nsf File").grid(row=1, column=2) #, sticky=Tkinter.E)
         self.chooseNsfButton = Tkinter.Button(self.master, text="Select SOURCE nsf file", command= self.openNsfFile, relief =Tkinter.GROOVE)
         self.chooseNsfButton.grid(row=1,column=1, sticky=Tkinter.E+Tkinter.W)
+
+        #Destination chooser
+        self.chooseDestButton = Tkinter.Button(self.master, text="Select DESTINATION mbox file", command= self.openDestination, relief =Tkinter.GROOVE)
+        self.chooseDestButton.grid(row=1,column=2, sticky=Tkinter.E+Tkinter.W)
 
         #Password
         Tkinter.Label(self.master, text="Enter Lotus Notes password").grid(row=2, column=1, sticky=Tkinter.W)
         self.entryPassword = Tkinter.Entry(self.master, relief =Tkinter.GROOVE) #, show="*")
         self.entryPassword.insert(0, "Enter Lotus Notes password")
         self.entryPassword.grid(row=2,column=1, sticky=Tkinter.E+Tkinter.W)
-
-        #Destination chooser
-        #Tkinter.Label(self.master, text="Destination").grid(row=, column=2, sticky=Tkinter.W)
-        self.chooseDestButton = Tkinter.Button(self.master, text="Select DESTINATION directory", command= self.openDestination, relief =Tkinter.GROOVE)
-        self.chooseDestButton.grid(row=1,column=2, sticky=Tkinter.E+Tkinter.W)
+        self.entryPassword.bind("<FocusIn>", self.bindEntry)
 
         #Action button
         self.startButton = Tkinter.Button(self.master, text="Check parameters", command= self.doConvert, relief =Tkinter.GROOVE)
@@ -56,50 +57,77 @@ class Gui(Tkinter.Frame):
         #Message Area
         frame = Tkinter.Frame(self.master)
         frame.grid(row=5, column=1, columnspan=2)
-        self.messageWidget = Tkinter.Text(frame, width=60, height=10, state = Tkinter.DISABLED)
+        self.messageWidget = Tkinter.Text(frame, width=60, height=10, state = Tkinter.DISABLED, wrap=Tkinter.NONE)
         scrollY = Tkinter.Scrollbar(frame, orient = Tkinter.VERTICAL, command = self.messageWidget.yview)
         self.messageWidget['yscrollcommand'] = scrollY.set
         scrollY.pack(side=Tkinter.RIGHT,expand=Tkinter.NO,fill=Tkinter.Y)
+        scrollX = Tkinter.Scrollbar(frame, orient = Tkinter.HORIZONTAL, command = self.messageWidget.xview)
+        self.messageWidget['xscrollcommand'] = scrollX.set
+        scrollX.pack(side=Tkinter.BOTTOM,expand=Tkinter.NO,fill=Tkinter.X)
+
         self.messageWidget.pack(side=Tkinter.RIGHT,expand=Tkinter.YES,fill=Tkinter.BOTH)
-        self.log("Visit http://code.google.com/p/nlconverter/ for docs.")
+        self.log("INFO: Visit http://code.google.com/p/nlconverter/ for docs.\n")
+
+    def bindEntry(self, foo= "bar"):
+        """Blank the pasword field and set it in password mode"""
+        self.entryPassword.delete(0, Tkinter.END)
+        self.entryPassword.config(show="*")
+        self.entryPassword.unbind("<FocusIn>") #not needed anymore
 
     def debug(self):
+        """Debug"""
         print self.nsfPath
         print self.entryPassword.get()
-        print self.destPath
+        print self.destMbox
         print self.dbNotes
         print self.checked
 
+    def configWidgets(self, **kargs):
+        self.chooseNsfButton.config(**kargs)
+        self.chooseDestButton.config(**kargs)
+        self.entryPassword.config(**kargs)
+        self.startButton.config(**kargs)
+
     def realConvert(self):
+        """Perform the translation from nsf to mbox"""
         c = 0 #compteur de documents
         e = 0 #compteur d'erreur à la conversion
-                       
-        mc = NlconverterLib.NotesToMboxConverter(os.path.join(self.destPath, "mbox") )
+        tl = self.winfo_toplevel()
+
+        mc = NlconverterLib.NotesToMboxConverter(self.destMbox)
+        self.log("INFO: Populating mbox file : %s" % self.destMbox)
         mc.log = self.log
         #ic = NlconverterLib.NotesToIcalConverter(notesNsfPath+".ics")
         all = self.dbNotes.AllDocuments
         ac = all.Count
         doc = all.GetFirstDocument()
         
-        self.log("Starting Convert")
-        while doc and e < 100 :#and c < 200:
+        self.log("INFO: Starting Convert")
+        self.configWidgets(state = Tkinter.DISABLED)
+        while doc and e < 100 : #stop after 100 exceptions...
             try:
                 mc.addDocument(doc)                
                 #ic.addDocument(doc)
         
             except Exception, ex:
                 e += 1 #compte les exceptions
-                self.log("--Exception for message %d (%s)" % (c, ex))
+                self.log("ERROR: Exception for message %d (%s - see below) :" % (c, ex))
                 mc.debug(doc)
         
             finally:
                 doc = all.GetNextDocument(doc)
                 c+=1
                 if (c % 100) == 0:
-                    self.log("%.1f%%, e=%d, c=%d" % (float(100.*c/ac), e, c) )
+                    tl.title("Lotus Notes Converter - Running (%.1f%%)" % float(100.*c/ac))
+                    self.update()
                     
-        self.log("Exceptions a traiter manuellement: %d ... Documents OK : %d" % (e, c))
-        self.log("End of Convert")
+        self.log("\nINFO: Exceptions a traiter manuellement: %d ... Documents OK : %d" % (e, c))
+        mc.close()
+        #ic.close()
+        self.log("INFO: End of convert")
+        tl.title("Lotus Notes Converter")
+        self.configWidgets(state = Tkinter.NORMAL)
+        self.unchecked()
 
     def doConvert(self):
         if self.checked:
@@ -109,21 +137,30 @@ class Gui(Tkinter.Frame):
                 self.dbNotes = NlconverterLib.getNotesDb(self.nsfPath, self.entryPassword.get())
                 all=self.dbNotes.AllDocuments
                 ac = all.Count
-                self.log("Documents in %s : %d" % (self.dbNotes, ac) )
+                self.log("INFO: Documents in %s : %d" % (self.dbNotes, ac) )
             except:
-                self.log("Error connecting to Notes")
+                self.log("ERROR: Could not connect to Notes !")
+                self.registerDll()
                 self.dbNotes = None
             self.check()
+
+    def registerDll(self):
+        if NlconverterLib.registerNotesDll():
+            self.log("INFO: NotesDll registered")
+            return True
+        else :
+            self.log("ERROR : Could not find and register the dll (see the documentation)")
+            return False
 
     def check(self):
         check = self.dbNotes != None and self.nsfPath != None and self.entryPassword.get() != ""
         if check :
             self.startButton.config(text = "Convert")
             self.checked = True
-            self.log("Parameters : OK")
+            self.log("INFO: Parameters OK")
         else :
             self.unchecked()
-            self.log("Check your input")
+            self.log("ERROR : Check your input")
             #self.debug()
         return self.checked   
 
@@ -136,10 +173,10 @@ class Gui(Tkinter.Frame):
             self.unchecked()
 
     def openDestination(self):
-        repname = self.tk.call('tk_chooseDirectory','-initialdir',self.defaultOpenPath)
+        repname = self.tk.call('tk_getSaveFile','-initialdir',self.defaultOpenPath, "-initialfile", self.defaultSaveName)
         if repname != "" and type(repname) is not tuple and str(repname) != "":
-            self.destPath = str(repname)
-            self.chooseDestButton.config(text = "Write mbox to %s" % self.destPath)
+            self.destMbox = str(repname)
+            self.chooseDestButton.config(text = "Write mbox to %s" % self.destMbox)
             self.unchecked()
 
     def unchecked(self):

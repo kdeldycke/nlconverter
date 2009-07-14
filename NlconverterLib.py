@@ -28,7 +28,15 @@ addressNotesDomainTable =  { 'dgi.finances.gouv.fr' : 'dgfip.finances.gouv.fr', 
 reGenericAddressNotes = re.compile(r'CN=(.*?)\s+(.*?)\/(.*?)O=(\w*?)\/C=(\w*)', re.IGNORECASE)
 reOU = re.compile(r'OU=(\w+?)\/', re.IGNORECASE)
 reAddressMail = re.compile(r'([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,6})', re.IGNORECASE)
+#this list should be extended to match regular install path
+notesDllPathList = ['c:/notes', 'd:/notes']
 
+def registerNotesDll():
+    for p in notesDllPathList :
+        fp = os.path.join(p, 'nlsxbe.dll')
+        if os.path.exists(fp) and os.system("regsvr32 /s %s" % fp) == 0:
+            return True
+    return False
 
 def getNotesDb(notesNsfPath, notesPasswd):
     """Connect to notes and open the nsf file"""
@@ -55,15 +63,23 @@ class NotesDocumentReader(object):
         else :
             return u''
 
-    def debug(self, doc):
+    def fullDebug(self, doc):
         """Debug method : print all items values"""
-        for it in doc.Items:
+        self.debugItems(doc, doc.Items)
+
+    def debug(self, doc):
+        """Debug method : print message identifiers"""
+        self.debugItems(doc, ["Subject", "From", "To", "PostedDate", "DeliveredDate"])
+
+    def debugItems(self, doc, itemlist):
+        """Generic debug method"""
+        self.log(20*'-')
+        for it in itemlist:
             try:
-                self.log("%s => %s" % (it, doc.GetItemValue(it)) )
+                self.log("--%s = %s" % (it, doc.GetItemValue(it)) )
             except:
-                self.log("%s => !! can't display item value !!" % it)
-        self.log(20*'.')
-        self.log("")
+                self.log("--%s = !! can't display item value !!" % it)
+        self.log(20*'-')
 
     def matchAddress(self, value):
         """Convert Notes Address Name Space into emails"""
@@ -97,7 +113,12 @@ class NotesDocumentReader(object):
         a = doc.GetAttachment(f)
 
         #FIXME : bug when there is \xa0 (non breaking space) in the filename. What to do then ?
+        if a == None :
+            self.log("ERROR: Can't get attachment for this message :")
+            self.debug(doc)
+            return None
         a.ExtractFile(self.tempname)
+        return self.tempname
 
     def dateitem2datetime(self, doc, itemname):
         datetuple = time.gmtime(int(self.get1(doc, itemname)) )[:5]
@@ -141,7 +162,7 @@ class NotesToIcalConverter(NotesDocumentConverter):
         if not super(NotesToIcalConverter, self).addDocument(doc):
             return False
         if self.filedescriptor == None :
-             self.log("--Error : destination file not defined !!")
+             self.log("ERROR: destination file not defined !!")
         m = self.buildMessage(doc)
         self.cal.add_component(m)
         #self.debug(doc)
@@ -203,24 +224,24 @@ class NotesToMimeConverter(NotesDocumentConverter):
 
     def buildAttachment(self, doc, f):
         """Build Mime Attachment 'f' from doc""" 
-        self.extractAttachment(doc, f)
-        fp = open(self.tempname, 'rb')
+        tmp  = self.extractAttachment(doc, f)
         msg = email.mime.base.MIMEBase('application', 'octet-stream')
-        msg.set_payload(fp.read())
-        fp.close()
-        encoders.encode_base64(msg)
-        try:
-          fname = f.encode(self.charsetAttachment)
-        except :
-            fname = f.encode(self.charset)
-        msg.add_header('Content-Disposition', 'attachment', filename=fname)
+        if tmp != None :
+            fp = open(self.tempname, 'rb')
+            msg.set_payload(fp.read())
+            fp.close()
+            encoders.encode_base64(msg)
+            try:
+              fname = f.encode(self.charsetAttachment)
+            except :
+                fname = f.encode(self.charset)
+            msg.add_header('Content-Disposition', 'attachment', filename=fname)
         return msg
 
     def buildMessage(self, doc):
         """Build a message from doc"""
         main = email.mime.text.MIMEText(self.get1(doc, 'Body'), _charset=self.charset)
         
-        #files
         files = self.listAttachments(doc)
         if len(files) > 0 :
             m = email.mime.multipart.MIMEMultipart(charset=self.charset)
@@ -241,12 +262,18 @@ class NotesToMboxConverter(NotesToMimeConverter):
 
     def __init__(self, filename):
         super(NotesToMboxConverter, self).__init__()
+        self.filename = filename
         self.mbox = mailbox.mbox(filename, None, True)
         
     def addDocument(self, doc):
+        """Add a notes document to the mbox storage"""
         super(NotesToMboxConverter, self).addDocument(doc)
         m = self.buildMessage(doc)
         self.mbox.add(m)
 
     def close(self):
+        """Close the mbox file"""
+        self.log("Writing %s ... please wait." % self.filename)
         self.mbox.close()
+        self.log("INFO: mbox file %s completed" % self.filename)
+
