@@ -232,7 +232,7 @@ class NotesToMimeConverter(NotesDocumentConverter):
             fp.close()
             encoders.encode_base64(msg)
             try:
-              fname = f.encode(self.charsetAttachment)
+                fname = f.encode(self.charsetAttachment)
             except :
                 fname = f.encode(self.charset)
             msg.add_header('Content-Disposition', 'attachment', filename=fname)
@@ -243,14 +243,18 @@ class NotesToMimeConverter(NotesDocumentConverter):
         main = email.mime.text.MIMEText(self.get1(doc, 'Body'), _charset=self.charset)
         
         files = self.listAttachments(doc)
-        if len(files) > 0 :
+        if len(files) > 0 : 
             m = email.mime.multipart.MIMEMultipart(charset=self.charset)
             m.set_charset(self.charset)
             self.messageHeaders(doc, m)
             m.attach(main)
-            for f in files :
-                msg = self.buildAttachment(doc, f)
-                m.attach(msg)
+            for it in doc.Items :
+                #FIXME: should be in listAttachments
+                #FIXME: should use NotesEmbedded plutôt que de scanner les items
+                if it.type == 1084:
+                    f = it.Values[0]
+                    msg = self.buildAttachment(doc, f)
+                    m.attach(msg)
         else:
             m = main
             self.messageHeaders(doc, m)

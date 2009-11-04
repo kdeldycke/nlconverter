@@ -47,7 +47,8 @@ if len(sys.argv) == 1:
 
 # nécessaire pour aider py2exe a résoudre les dépendances de SOAPpy et de ClientCooki
 import NlconverterLib
-import email.Generators, email.Iterators
+import email.Iterators
+import email
 
 # lib de transformation en binaire.
 import py2exe
@@ -73,7 +74,7 @@ setup(
 #                          'pyGlobus.io', 'win32evtlog', 'win32evtlogutil',
 #                          'xml.dom.ext', 'xml.ns', 'String'],
             "optimize": 2,
-            "packages" : ["encodings"] }},#, "email"]}},
+            "packages" : ["encodings","email"]}},
     author='hugues.bernard@gmail.com',
     url='http://code.google.com/p/nlconverter/',
     )
