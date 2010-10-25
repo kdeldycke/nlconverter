@@ -35,7 +35,7 @@ doc = all.GetFirstDocument()
 
 while doc and c < 100000 and e < 99999:
     try:
-        #mc.addDocument(doc)                
+        mc.addDocument(doc)                
         ic.addDocument(doc)
 
     except Exception, ex:
